@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Daily movement</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Instrument+Sans:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#e6ede8;--panel:#f4f8f5;--ink:#17302b;--mute:#5d7770;--line:#c9d6cf;--steps:#1f6f78;--dist:#3f8f5a;--vo2:#d9892b}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1c19;--panel:#162623;--ink:#e3efe9;--mute:#8fa9a1;--line:#27403a;--steps:#5cc0c9;--dist:#7fd197;--vo2:#f0aa55}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Instrument Sans",system-ui,sans-serif}
+main{max-width:880px;margin:0 auto;padding:28px 18px 60px}
+header{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px}
+h1{font:700 1.5rem "Fraunces",Georgia,serif;margin:0}
+.sub{color:var(--mute);font-size:.9rem}
+.hero{display:flex;gap:28px;align-items:center;flex-wrap:wrap;margin:26px 0;padding:26px;background:var(--panel);border:1px solid var(--line);border-radius:18px}
+.ring{position:relative;width:200px;height:200px;flex:none}
+.ring svg{transform:rotate(-90deg)}
+.ring .c{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.big{font:700 2.8rem/1 "Fraunces",Georgia,serif;font-variant-numeric:tabular-nums}
+.mute{color:var(--mute);font-size:.88rem}
+.side{flex:1;min-width:220px;display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.side b{display:block;font:700 1.9rem/1.1 "Fraunces",Georgia,serif;font-variant-numeric:tabular-nums}
+.side .full{grid-column:1/-1}
+section.chart{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin-bottom:16px}
+h2{font:600 1rem "Instrument Sans",sans-serif;margin:0 0 12px;display:flex;justify-content:space-between}
+svg.plot{width:100%;height:auto;display:block;overflow:visible}
+.tick{fill:var(--mute);font-size:11px}
+#msg{padding:14px 16px;border-left:4px solid var(--vo2);background:var(--panel);margin:16px 0;display:none}
+@media(prefers-reduced-motion:no-preference){.ring circle.v{transition:stroke-dashoffset 1s ease}}
+</style>
+</head>
+<body>
+<main>
+<header><h1>Daily movement</h1><span class="sub" id="upd"></span></header>
+<div id="msg"></div>
+
+<div class="hero">
+  <div class="ring">
+    <svg width="200" height="200" viewBox="0 0 200 200">
+      <circle cx="100" cy="100" r="86" fill="none" stroke="var(--line)" stroke-width="14"/>
+      <circle class="v" id="arc" cx="100" cy="100" r="86" fill="none" stroke="var(--steps)" stroke-width="14" stroke-linecap="round" stroke-dasharray="540.4" stroke-dashoffset="540.4"/>
+    </svg>
+    <div class="c"><span class="big" id="steps">–</span><span class="mute" id="goal"></span></div>
+  </div>
+  <div class="side">
+    <div><span class="mute">Distance</span><b id="dist">–</b></div>
+    <div><span class="mute">VO2 max</span><b id="vo2">–</b></div>
+    <div class="full"><span class="mute" id="avg"></span></div>
+  </div>
+</div>
+
+<section class="chart"><h2>Steps, last 14 days <span class="mute" id="stepsNote"></span></h2><div id="cSteps"></div></section>
+<section class="chart"><h2>Distance, last 14 days <span class="mute" id="distNote"></span></h2><div id="cDist"></div></section>
+<section class="chart"><h2>VO2 max trend</h2><div id="cVo2"></div></section>
+</main>
+
+<script>
+// ====== CONFIG: edit these ======
+const CSV_URL   = "";      // Google Sheet → File → Share → Publish to web → CSV link
+const STEP_GOAL = 10000;
+const DIST_UNIT = "km";    // label only; must match your Health app unit
+const DAYS      = 14;
+// =================================
+
+const $ = id => document.getElementById(id);
+const fmt = (n, d=0) => n == null ? "–" : Number(n).toLocaleString(undefined,{maximumFractionDigits:d,minimumFractionDigits:d});
+
+function parseCSV(t){
+  const rows=[];let r=[],f="",q=false;
+  for(let i=0;i<t.length;i++){const c=t[i];
+    if(q){if(c=='"'&&t[i+1]=='"'){f+='"';i++}else if(c=='"')q=false;else f+=c}
+    else if(c=='"')q=true;else if(c==","){r.push(f);f=""}
+    else if(c=="\n"){r.push(f);rows.push(r);r=[];f=""}else if(c!="\r")f+=c}
+  if(f||r.length){r.push(f);rows.push(r)}
+  return rows;
+}
+function toISO(s){
+  s=String(s).trim();
+  if(/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10);
+  const d=new Date(s); if(isNaN(d)) return null;
+  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+}
+const num = v => { const n = parseFloat(String(v).replace(/,/g,"")); return isNaN(n) ? null : n; };
+
+function demo(){
+  const out=[];const today=new Date();
+  for(let i=29;i>=0;i--){const d=new Date(today);d.setDate(d.getDate()-i);
+    out.push({date:toISO(d.toISOString().slice(0,10)),steps:Math.round(5000+Math.random()*9000),distance:+(3+Math.random()*7).toFixed(2),vo2max:+(41+i*-0.03+Math.random()*0.6).toFixed(1)});}
+  return out;
+}
+
+function bars(el, data, color, d){
+  const W=700,H=180,p={l:34,r:6,t:8,b:22};
+  const max=Math.max(...data.map(x=>x.v||0),1)*1.1, bw=(W-p.l-p.r)/data.length;
+  let s=`<svg class="plot" viewBox="0 0 ${W} ${H}" role="img">`;
+  [0,.5,1].forEach(g=>{const y=p.t+(H-p.t-p.b)*(1-g);
+    s+=`<line x1="${p.l}" x2="${W-p.r}" y1="${y}" y2="${y}" stroke="var(--line)"/><text class="tick" x="${p.l-6}" y="${y+4}" text-anchor="end">${fmt(max*g,d)}</text>`});
+  data.forEach((x,i)=>{const h=(H-p.t-p.b)*((x.v||0)/max),X=p.l+i*bw+bw*.18,Y=H-p.b-h;
+    s+=`<rect x="${X}" y="${Y}" width="${bw*.64}" height="${h}" rx="3" fill="${color}"><title>${x.date}: ${fmt(x.v,d)}</title></rect>`;
+    if(i%Math.ceil(data.length/7)==0||i==data.length-1)s+=`<text class="tick" x="${X+bw*.32}" y="${H-6}" text-anchor="middle">${x.date.slice(5)}</text>`});
+  el.innerHTML=s+"</svg>";
+}
+function line(el, data, color){
+  const pts=data.filter(x=>x.v!=null);
+  if(pts.length<2){el.innerHTML='<p class="mute">Needs at least two VO2 max readings.</p>';return}
+  const W=700,H=160,p={l:34,r:8,t:10,b:22};
+  const lo=Math.min(...pts.map(x=>x.v))-1,hi=Math.max(...pts.map(x=>x.v))+1;
+  const X=i=>p.l+i*(W-p.l-p.r)/(pts.length-1),Y=v=>p.t+(H-p.t-p.b)*(1-(v-lo)/(hi-lo));
+  let s=`<svg class="plot" viewBox="0 0 ${W} ${H}" role="img">`;
+  [lo,(lo+hi)/2,hi].forEach(v=>s+=`<line x1="${p.l}" x2="${W-p.r}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--line)"/><text class="tick" x="${p.l-6}" y="${Y(v)+4}" text-anchor="end">${fmt(v,1)}</text>`);
+  s+=`<polyline fill="none" stroke="${color}" stroke-width="2.5" stroke-linejoin="round" points="${pts.map((x,i)=>X(i)+","+Y(x.v)).join(" ")}"/>`;
+  pts.forEach((x,i)=>s+=`<circle cx="${X(i)}" cy="${Y(x.v)}" r="3.5" fill="${color}"><title>${x.date}: ${fmt(x.v,1)}</title></circle>`);
+  s+=`<text class="tick" x="${p.l}" y="${H-6}">${pts[0].date.slice(5)}</text><text class="tick" x="${W-p.r}" y="${H-6}" text-anchor="end">${pts.at(-1).date.slice(5)}</text>`;
+  el.innerHTML=s+"</svg>";
+}
+
+function render(rows, isDemo){
+  rows.sort((a,b)=>a.date<b.date?-1:1);
+  const last=rows.at(-1), win=rows.slice(-DAYS);
+  $("steps").textContent=fmt(last.steps);
+  $("goal").textContent=`of ${fmt(STEP_GOAL)} steps`;
+  $("dist").textContent=last.distance==null?"–":fmt(last.distance,2)+" "+DIST_UNIT;
+  const lastV=[...rows].reverse().find(r=>r.vo2max!=null);
+  $("vo2").textContent=lastV?fmt(lastV.vo2max,1):"–";
+  $("upd").textContent=(isDemo?"Demo data · ":"")+"Latest entry "+last.date;
+  const frac=Math.min((last.steps||0)/STEP_GOAL,1);
+  requestAnimationFrame(()=>$("arc").style.strokeDashoffset=540.4*(1-frac));
+  const sv=win.map(r=>r.steps).filter(v=>v!=null), avg=sv.reduce((a,b)=>a+b,0)/(sv.length||1);
+  const hit=sv.filter(v=>v>=STEP_GOAL).length;
+  $("avg").textContent=`${DAYS}-day average ${fmt(avg)} steps. Goal reached on ${hit} of ${sv.length} days.`;
+  $("stepsNote").textContent="avg "+fmt(avg);
+  const dv=win.map(r=>r.distance).filter(v=>v!=null);
+  $("distNote").textContent=DIST_UNIT+" · avg "+fmt(dv.reduce((a,b)=>a+b,0)/(dv.length||1),1);
+  bars($("cSteps"),win.map(r=>({date:r.date,v:r.steps})),"var(--steps)",0);
+  bars($("cDist"),win.map(r=>({date:r.date,v:r.distance})),"var(--dist)",1);
+  line($("cVo2"),rows.filter(r=>r.vo2max!=null).map(r=>({date:r.date,v:r.vo2max})),"var(--vo2)");
+}
+
+async function init(){
+  if(!CSV_URL){
+    $("msg").style.display="block";
+    $("msg").textContent="Showing demo data. Set CSV_URL in index.html to your published Google Sheet link.";
+    return render(demo(),true);
+  }
+  try{
+    const res=await fetch(CSV_URL+(CSV_URL.includes("?")?"&":"?")+"t="+Date.now());
+    if(!res.ok) throw new Error("HTTP "+res.status);
+    const t=parseCSV(await res.text()), h=t[0].map(x=>x.trim().toLowerCase());
+    const ix=k=>h.indexOf(k);
+    const rows=t.slice(1).map(r=>({date:toISO(r[ix("date")]),steps:num(r[ix("steps")]),distance:num(r[ix("distance")]),vo2max:num(r[ix("vo2max")])})).filter(r=>r.date);
+    if(!rows.length) throw new Error("No rows found. Run the shortcut once.");
+    render(rows,false);
+  }catch(e){
+    $("msg").style.display="block";
+    $("msg").textContent="Couldn't load your sheet ("+e.message+"). Check that it is published to the web as CSV and CSV_URL is correct.";
+  }
+}
+init();
+</script>
+</body>
+</html>
